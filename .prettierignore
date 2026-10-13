@@ -1,0 +1,9 @@
+node_modules
+.nuxt
+.output
+.vercel
+.data
+.env*
+package-lock.json
+public/fonts
+design/*.svg
