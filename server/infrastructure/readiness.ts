@@ -28,7 +28,7 @@ export function createReadinessChecker({
         } else {
           await probe()
         }
-        cached = { expiresAt: now() + 5_000, failed: false }
+        cached = { expiresAt: Math.min(now() + 5_000, lastAuditAt + 30_000), failed: false }
       } catch (error) {
         cached = { expiresAt: now() + 1_000, failed: true, error }
         throw error
