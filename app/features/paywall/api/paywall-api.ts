@@ -5,6 +5,7 @@ import type {
   RestoreResponse,
 } from '#shared/contracts/paywall'
 import { PaywallApiError } from './api-error'
+import { deviceBootstrap, type DeviceBootstrap } from './device-bootstrap'
 
 /** Transport is deliberately separate from the purchase flow and presentational components. */
 export interface PaywallApi {
@@ -13,10 +14,20 @@ export interface PaywallApi {
   restore(signal: AbortSignal): Promise<RestoreResponse>
 }
 
-type RequestOptions = { signal: AbortSignal; method?: 'POST'; body?: PurchaseRequest; retry: 0 }
+type RequestOptions = {
+  signal: AbortSignal
+  method?: 'POST'
+  body?: PurchaseRequest
+  headers?: Record<string, string>
+  retry: 0
+}
 type Transport = (path: string, options: RequestOptions) => Promise<unknown>
 
-export function createPaywallApi(transport: Transport, timeoutMs = 12_000): PaywallApi {
+export function createPaywallApi(
+  transport: Transport,
+  timeoutMs = 12_000,
+  bootstrap: DeviceBootstrap = deviceBootstrap,
+): PaywallApi {
   async function request<T>(
     path: string,
     signal: AbortSignal,
@@ -30,11 +41,22 @@ export function createPaywallApi(transport: Transport, timeoutMs = 12_000): Payw
     if (signal.aborted) abort()
     const timer = setTimeout(abort, timeoutMs)
     try {
-      return (await transport(path, { signal: controller.signal, method, body, retry: 0 })) as T
+      const deviceId = path === '/api/offers' ? await bootstrap(controller.signal) : null
+      if (controller.signal.aborted) throw new Error('Aborted')
+      return (await transport(path, {
+        signal: controller.signal,
+        method,
+        body,
+        headers: deviceId ? { 'X-Lumi-Bootstrap': deviceId } : undefined,
+        retry: 0,
+      })) as T
     } catch (error) {
       const response = error as { data?: { data?: { code?: string } } }
+      const code = response?.data?.data?.code
       throw new PaywallApiError(
-        response?.data?.data?.code === 'SESSION_REQUIRED' ? 'SESSION_REQUIRED' : 'UNAVAILABLE',
+        code === 'SESSION_REQUIRED' || code === 'BOOTSTRAP_REQUIRED' || code === 'RATE_LIMITED'
+          ? code
+          : 'UNAVAILABLE',
       )
     } finally {
       clearTimeout(timer)

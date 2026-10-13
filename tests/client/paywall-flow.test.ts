@@ -3,6 +3,10 @@ import type { Offer, PurchaseResponse } from '#shared/contracts/paywall'
 import type { PaywallApi } from '../../app/features/paywall/api/paywall-api'
 import { usePaywall } from '../../app/features/paywall/composables/usePaywall'
 import { PaywallApiError } from '../../app/features/paywall/api/api-error'
+import { createPurchaseAttempts } from '../../app/features/paywall/api/purchase-attempts'
+
+const firstRequestId = '11111111-2222-4333-8444-555555555555'
+const secondRequestId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
 
 const offers: Offer[] = [
   {
@@ -25,11 +29,13 @@ const offers: Offer[] = [
 const result: PurchaseResponse = {
   purchase: {
     id: 'receipt-1',
+    requestId: firstRequestId,
     offerId: 'yearly',
     purchasedAt: '2026-10-13T12:00:00.000Z',
     expiresAt: '2027-10-13T12:00:00.000Z',
   },
   replayed: false,
+  active: true,
 }
 function fixture(overrides: Partial<PaywallApi> = {}) {
   const api: PaywallApi = {
@@ -38,7 +44,7 @@ function fixture(overrides: Partial<PaywallApi> = {}) {
     restore: vi.fn().mockResolvedValue({ purchase: null }),
     ...overrides,
   }
-  const createId = vi.fn().mockReturnValueOnce('intent-1').mockReturnValue('intent-2')
+  const createId = vi.fn().mockReturnValueOnce(firstRequestId).mockReturnValue(secondRequestId)
   return { api, createId, flow: usePaywall(api, createId) }
 }
 
@@ -50,7 +56,7 @@ describe('paywall interaction flow', () => {
     expect(flow.busy.value).toBe(false)
     const empty = fixture({ offers: vi.fn().mockResolvedValue({ offers: [] }) })
     await empty.flow.load()
-    expect(empty.flow.error.value?.scope).toBe('offers')
+    expect(empty.flow.catalogError.value).toContain('Не удалось загрузить тарифы')
     expect(empty.flow.busy.value).toBe(false)
   })
 
@@ -90,8 +96,8 @@ describe('paywall interaction flow', () => {
     expect(flow.error.value?.scope).toBe('purchase')
     await flow.purchase()
     expect(purchase.mock.calls.map((call) => call[0])).toEqual([
-      { offerId: 'yearly', requestId: 'intent-1' },
-      { offerId: 'yearly', requestId: 'intent-1' },
+      { offerId: 'yearly', requestId: firstRequestId },
+      { offerId: 'yearly', requestId: firstRequestId },
     ])
     expect(createId).toHaveBeenCalledTimes(1)
     expect(flow.receipt.value).toEqual(result.purchase)
@@ -104,7 +110,7 @@ describe('paywall interaction flow', () => {
     await flow.purchase()
     flow.select('monthly')
     await flow.purchase()
-    expect(purchase.mock.calls[1]![0]).toEqual({ offerId: 'monthly', requestId: 'intent-2' })
+    expect(purchase.mock.calls[1]![0]).toEqual({ offerId: 'monthly', requestId: secondRequestId })
   })
 
   it('retains uncertain purchase keys when switching away from a tariff and back', async () => {
@@ -173,5 +179,137 @@ describe('paywall interaction flow', () => {
     complete(result)
     await pending
     expect(flow.receipt.value).toBeNull()
+  })
+
+  it('retires the matching restored attempt across reloads after a lost purchase response', async () => {
+    const data = new Map<string, string>()
+    const storage = {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => data.set(key, value),
+      removeItem: (key: string) => data.delete(key),
+    }
+    const { api } = fixture({
+      purchase: vi.fn().mockRejectedValue(new Error('Response lost after commit')),
+      restore: vi.fn().mockResolvedValue({ purchase: result.purchase }),
+    })
+    const initial = usePaywall(api, () => firstRequestId, createPurchaseAttempts(storage))
+    await initial.load()
+    await initial.purchase()
+    expect(createPurchaseAttempts(storage).get('yearly')).toBe(firstRequestId)
+
+    await initial.restore()
+    expect(initial.receipt.value).toEqual(result.purchase)
+    expect(createPurchaseAttempts(storage).get('yearly')).toBeUndefined()
+    initial.dispose()
+
+    const nextPurchase = vi.fn().mockResolvedValue({
+      ...result,
+      purchase: { ...result.purchase, id: 'receipt-2', requestId: secondRequestId },
+    })
+    const reloaded = usePaywall(
+      { ...api, purchase: nextPurchase },
+      () => secondRequestId,
+      createPurchaseAttempts(storage),
+    )
+    await reloaded.load()
+    await reloaded.purchase()
+    expect(nextPurchase).toHaveBeenCalledWith(
+      { offerId: 'yearly', requestId: secondRequestId },
+      expect.any(AbortSignal),
+    )
+    expect(reloaded.receipt.value?.id).toBe('receipt-2')
+  })
+
+  it('keeps the uncertain key when restore finds another purchase of the same tariff', async () => {
+    const attempts = createPurchaseAttempts()
+    attempts.set('yearly', firstRequestId)
+    const { api } = fixture({
+      restore: vi.fn().mockResolvedValue({
+        purchase: { ...result.purchase, requestId: secondRequestId },
+      }),
+    })
+    const flow = usePaywall(api, () => secondRequestId, attempts)
+    await flow.load()
+    await flow.restore()
+    expect(flow.restored.value).toBe(true)
+    expect(attempts.get('yearly')).toBe(firstRequestId)
+  })
+
+  it('does not turn an expired replay into success or automatically buy a new period', async () => {
+    const purchase = vi
+      .fn()
+      .mockResolvedValueOnce({ ...result, active: false, replayed: true })
+      .mockResolvedValueOnce({
+        ...result,
+        purchase: { ...result.purchase, requestId: secondRequestId },
+      })
+    const attempts = createPurchaseAttempts()
+    attempts.set('yearly', firstRequestId)
+    const { api } = fixture({ purchase })
+    const createId = vi.fn().mockReturnValue(secondRequestId)
+    const flow = usePaywall(api, createId, attempts)
+    await flow.load()
+
+    await flow.purchase()
+    expect(purchase).toHaveBeenCalledTimes(1)
+    expect(createId).not.toHaveBeenCalled()
+    expect(flow.receipt.value).toBeNull()
+    expect(flow.notice.value).toContain('Срок этой покупки уже истёк')
+    expect(flow.busy.value).toBe(false)
+    expect(attempts.get('yearly')).toBeUndefined()
+
+    await flow.purchase()
+    expect(purchase).toHaveBeenCalledTimes(2)
+    expect(purchase.mock.calls[1]![0].requestId).toBe(secondRequestId)
+    expect(flow.receipt.value).toEqual({ ...result.purchase, requestId: secondRequestId })
+  })
+
+  it('uses the server access verdict even if the client clock would consider it expired', async () => {
+    const { flow } = fixture({
+      purchase: vi.fn().mockResolvedValue({
+        ...result,
+        purchase: { ...result.purchase, expiresAt: '2000-01-01T00:00:00Z' },
+      }),
+    })
+    await flow.load()
+    await flow.purchase()
+    expect(flow.receipt.value?.expiresAt).toBe('2000-01-01T00:00:00Z')
+    expect(flow.notice.value).toBe('')
+  })
+
+  it('restores access without a catalog and preserves catalog retry after an empty restore', async () => {
+    const restore = vi
+      .fn()
+      .mockResolvedValueOnce({ purchase: null })
+      .mockResolvedValueOnce({ purchase: result.purchase })
+    const { flow } = fixture({ offers: vi.fn().mockRejectedValue(new Error('Offline')), restore })
+    await flow.load()
+    const catalogError = flow.catalogError.value
+    expect(catalogError).toBeTruthy()
+    await flow.restore()
+    expect(flow.catalogError.value).toBe(catalogError)
+    expect(flow.notice.value).toContain('пока нет активных покупок')
+    await flow.restore()
+    expect(flow.receipt.value).toEqual(result.purchase)
+    expect(flow.restored.value).toBe(true)
+  })
+
+  it('explains blocked bootstrap storage and rate limits without losing the retry key', async () => {
+    const { flow } = fixture({
+      offers: vi.fn().mockRejectedValue(new PaywallApiError('BOOTSTRAP_REQUIRED')),
+    })
+    await flow.load()
+    expect(flow.catalogError.value).toContain('cookies и локальное хранилище')
+
+    const purchase = vi
+      .fn()
+      .mockRejectedValueOnce(new PaywallApiError('RATE_LIMITED'))
+      .mockResolvedValueOnce(result)
+    const limited = fixture({ purchase })
+    await limited.flow.load()
+    await limited.flow.purchase()
+    expect(limited.flow.error.value?.message).toContain('Слишком много запросов')
+    await limited.flow.purchase()
+    expect(purchase.mock.calls[1]![0].requestId).toBe(firstRequestId)
   })
 })

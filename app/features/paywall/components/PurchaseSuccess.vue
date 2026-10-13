@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { computed, onMounted, ref, useTemplateRef } from 'vue'
 import type { PurchaseReceipt, Offer } from '#shared/contracts/paywall'
 import LumiIllustration from './LumiIllustration.vue'
+import UiButton from '../../../ui/UiButton.vue'
 
 const props = defineProps<{ receipt: PurchaseReceipt; restored: boolean; offers: Offer[] }>()
 const heading = useTemplateRef<HTMLHeadingElement>('heading')
@@ -59,16 +61,16 @@ onMounted(() => heading.value?.focus())
       <br />
       Доступ восстановится в этом браузере.
     </p>
-    <button
+    <UiButton
+      variant="ghost"
       class="receipt-toggle"
-      type="button"
       :aria-expanded="detailsOpen"
       aria-controls="receipt-details"
       @click="detailsOpen = !detailsOpen"
     >
       {{ detailsOpen ? 'Скрыть детали покупки' : 'Посмотреть детали покупки' }}
       <span aria-hidden="true">{{ detailsOpen ? '−' : '+' }}</span>
-    </button>
+    </UiButton>
     <dl v-if="detailsOpen" id="receipt-details" class="receipt-details">
       <dt>Номер покупки</dt>
       <dd>{{ receipt.id }}</dd>
@@ -88,3 +90,5 @@ onMounted(() => heading.value?.focus())
     </dl>
   </section>
 </template>
+
+<style src="./PurchaseSuccess.css" scoped />

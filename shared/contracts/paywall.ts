@@ -16,6 +16,7 @@ export interface PurchaseRequest {
 }
 export interface PurchaseReceipt {
   id: string
+  requestId: string
   offerId: Offer['id']
   purchasedAt: string
   expiresAt: string
@@ -23,6 +24,7 @@ export interface PurchaseReceipt {
 export interface PurchaseResponse {
   purchase: PurchaseReceipt
   replayed: boolean
+  active: boolean
 }
 export interface RestoreResponse {
   purchase: PurchaseReceipt | null

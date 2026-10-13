@@ -42,8 +42,9 @@ describe('paywall use cases', () => {
         expect.objectContaining({ deviceId, requestId, priceMinor, currency: 'RUB' }),
       )
       expect(result).toEqual({
-        purchase: { id: purchaseId, offerId, purchasedAt: now.toISOString(), expiresAt },
+        purchase: { id: purchaseId, requestId, offerId, purchasedAt: now.toISOString(), expiresAt },
         replayed: false,
+        active: true,
       })
       expect(result.purchase).not.toHaveProperty('deviceId')
     },
@@ -89,5 +90,28 @@ describe('paywall use cases', () => {
     await expect(service.purchase(deviceId, { offerId: 'monthly', requestId })).rejects.toThrow(
       'database offline',
     )
+  })
+
+  it('marks an expired replay inactive without changing its receipt', async () => {
+    const { service, purchases } = setup()
+    vi.mocked(purchases.createOrReplay).mockResolvedValue({
+      purchase: {
+        id: purchaseId,
+        deviceId,
+        requestId,
+        offerId: 'monthly',
+        priceMinor: 29900,
+        currency: 'RUB',
+        purchasedAt: new Date('2026-01-01T00:00:00Z'),
+        expiresAt: now,
+      },
+      replayed: true,
+    })
+    const result = await service.purchase(deviceId, { offerId: 'monthly', requestId })
+    expect(result).toMatchObject({
+      active: false,
+      replayed: true,
+      purchase: { requestId, expiresAt: now.toISOString() },
+    })
   })
 })

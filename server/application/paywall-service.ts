@@ -16,6 +16,7 @@ interface Dependencies {
 function receipt(purchase: Purchase): PurchaseReceipt {
   return {
     id: purchase.id,
+    requestId: purchase.requestId,
     offerId: purchase.offerId,
     purchasedAt: purchase.purchasedAt.toISOString(),
     expiresAt: purchase.expiresAt.toISOString(),
@@ -42,7 +43,11 @@ export function createPaywallService({ purchases, now, newId }: Dependencies) {
         purchasedAt,
         expiresAt: new Date(purchasedAt.getTime() + offer.durationDays * 86_400_000),
       })
-      return { purchase: receipt(result.purchase), replayed: result.replayed }
+      return {
+        purchase: receipt(result.purchase),
+        replayed: result.replayed,
+        active: result.purchase.expiresAt.getTime() > now().getTime(),
+      }
     },
 
     async restore(deviceId: string): Promise<RestoreResponse> {

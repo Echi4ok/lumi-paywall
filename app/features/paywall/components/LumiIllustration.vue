@@ -86,3 +86,5 @@
     </svg>
   </div>
 </template>
+
+<style src="./LumiIllustration.css" scoped />

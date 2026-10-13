@@ -11,7 +11,24 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: lumi_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_DRIVER: postgres
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/lumi_test
+      RATE_LIMIT_SECRET: ci-only-not-a-production-secret
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,3 +38,27 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run build
+      - run: npm run db:migrate
+      - run: npm run db:check
+      - run: npm run check:runtime
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:e2e
+      - name: Verify database backup and restore
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$POSTGRES_CONTAINER" pg_dump -U postgres -Fc lumi_test > "$RUNNER_TEMP/lumi.dump"
+          docker exec "$POSTGRES_CONTAINER" createdb -U postgres lumi_restore
+          docker exec -i "$POSTGRES_CONTAINER" pg_restore -U postgres -d lumi_restore --exit-on-error < "$RUNNER_TEMP/lumi.dump"
+          original=$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -d lumi_test -Atc 'SELECT count(*) FROM purchases')
+          restored=$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -d lumi_restore -Atc 'SELECT count(*) FROM purchases')
+          test "$original" -gt 0
+          test "$original" = "$restored"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-verification
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

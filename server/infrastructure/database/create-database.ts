@@ -1,24 +1,26 @@
-import { readFile, mkdir } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { neon } from '@neondatabase/serverless'
 import type { SqlClient } from './sql-client'
+import { createExternalDatabase } from './external-database'
+import { loadMigrations, migrationStatements, verifyMigrations } from './migrations'
+import { operationalError } from '../diagnostics'
 
 export async function createDatabase(
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<SqlClient> {
   if (environment.DATABASE_URL) {
-    const sql = neon(environment.DATABASE_URL)
-    return {
-      async query<Row>(statement: string, parameters: unknown[] = []) {
-        return (await sql.query(statement, parameters, {
-          fetchOptions: { signal: AbortSignal.timeout(10_000) },
-        })) as Row[]
-      },
+    const db = await createExternalDatabase(environment)
+    try {
+      await verifyMigrations(db)
+      return db
+    } catch (error) {
+      await db.close()
+      throw error
     }
   }
   // A serverless /tmp database would silently lose purchases between invocations.
   if (environment.NODE_ENV === 'production' || environment.VERCEL) {
-    throw new Error('DATABASE_URL is required in production')
+    throw operationalError('CONFIGURATION_ERROR', 'DATABASE_URL is required in production')
   }
 
   const { PGlite } = await import('@electric-sql/pglite')
@@ -27,7 +29,10 @@ export async function createDatabase(
   const pg = await PGlite.create(dataDir)
   try {
     // Local convenience only, once per process. Deployments use npm run db:migrate.
-    await pg.exec(await readFile(resolve('migrations/001_purchases.sql'), 'utf8'))
+    const migrations = await loadMigrations(resolve('migrations'))
+    await pg.transaction(async (transaction) => {
+      for (const statement of migrationStatements(migrations)) await transaction.query(statement)
+    })
   } catch (error) {
     await pg.close()
     throw error

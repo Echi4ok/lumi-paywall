@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { Offer } from '#shared/contracts/paywall'
 
 const props = defineProps<{
@@ -68,3 +69,5 @@ const monthly = computed(() => Math.round(props.offer.priceMinor / 100 / 12))
     </span>
   </label>
 </template>
+
+<style src="./OfferCard.css" scoped />

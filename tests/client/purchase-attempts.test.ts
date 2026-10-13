@@ -18,7 +18,7 @@ describe('unconfirmed request persistence', () => {
     createPurchaseAttempts(storage).set('yearly', requestId)
     const reloaded = createPurchaseAttempts(storage)
     expect(reloaded.get('yearly')).toBe(requestId)
-    reloaded.delete('yearly')
+    reloaded.confirm('yearly', requestId)
     expect(createPurchaseAttempts(storage).get('yearly')).toBeUndefined()
     expect(data.size).toBe(0)
   })
@@ -34,7 +34,7 @@ describe('unconfirmed request persistence', () => {
     })
     attempts.set('yearly', requestId)
     expect(attempts.get('yearly')).toBe(requestId)
-    expect(() => attempts.delete('yearly')).not.toThrow()
+    expect(() => attempts.confirm('yearly', requestId)).not.toThrow()
   })
 
   it('ignores malformed or unrelated storage data', () => {
@@ -45,5 +45,19 @@ describe('unconfirmed request persistence', () => {
     })
     expect(attempts.get('yearly')).toBeUndefined()
     expect(attempts.get('monthly')).toBeUndefined()
+  })
+
+  it('keeps an uncertain attempt when a different receipt is confirmed', () => {
+    const setItem = vi.fn()
+    const removeItem = vi.fn()
+    const attempts = createPurchaseAttempts({ getItem: () => null, setItem, removeItem })
+    attempts.set('yearly', requestId)
+
+    attempts.confirm('yearly', 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
+    attempts.confirm('monthly', requestId)
+
+    expect(attempts.get('yearly')).toBe(requestId)
+    expect(setItem).toHaveBeenCalledTimes(1)
+    expect(removeItem).not.toHaveBeenCalled()
   })
 })

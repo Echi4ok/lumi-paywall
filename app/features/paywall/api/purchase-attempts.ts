@@ -37,7 +37,8 @@ export function createPurchaseAttempts(storage?: AttemptStorage) {
       attempts.set(offerId, requestId)
       persist()
     },
-    delete(offerId: Offer['id']) {
+    confirm(offerId: Offer['id'], requestId: string) {
+      if (attempts.get(offerId) !== requestId) return
       attempts.delete(offerId)
       persist()
     },

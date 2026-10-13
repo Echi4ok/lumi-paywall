@@ -1,5 +1,4 @@
-import { randomUUID } from 'node:crypto'
-import { getCookie, getRequestURL, setCookie, type H3Event } from 'h3'
+import { getCookie, getHeader, getRequestURL, setCookie, type H3Event } from 'h3'
 import { z } from 'zod'
 import { apiError } from './errors'
 
@@ -14,7 +13,15 @@ export function readDeviceId(event: H3Event): string | null {
 export function ensureDeviceId(event: H3Event): string {
   const existing = readDeviceId(event)
   if (existing) return existing
-  const id = randomUUID()
+  // Shared IndexedDB creates this capability once, including concurrent tabs.
+  const bootstrap = deviceIdSchema.safeParse(getHeader(event, 'x-lumi-bootstrap'))
+  if (!bootstrap.success)
+    throw apiError(
+      400,
+      'BOOTSTRAP_REQUIRED',
+      'Разрешите cookies и локальное хранилище для этого сайта.',
+    )
+  const id = bootstrap.data
   persistDeviceId(event, id)
   return id
 }

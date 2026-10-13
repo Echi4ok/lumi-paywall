@@ -1,0 +1,73 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 280px;
+}
+button,
+input {
+  font: inherit;
+}
+button {
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+button:disabled {
+  cursor: wait;
+}
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid var(--purple);
+  outline-offset: 4px;
+}
+button {
+  border: 0;
+}
+h1,
+h2,
+p,
+ul {
+  margin: 0;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+h1 {
+  font-size: 29px;
+  font-weight: 900;
+  line-height: 33px;
+  text-align: center;
+  letter-spacing: 0;
+}
+@media (min-width: 600px) {
+  body {
+    padding: 36px 0;
+    background:
+      radial-gradient(ellipse at 20% 30%, #e7ddf5 0, transparent 50%),
+      radial-gradient(ellipse at 90% 85%, #f8e5dc 0, transparent 50%), #eee9f5;
+  }
+}
+@media (max-width: 359px) {
+  h1 {
+    font-size: 26px;
+    line-height: 31px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

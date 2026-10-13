@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import { computed, onMounted, onScopeDispose } from 'vue'
 import LumiIllustration from './LumiIllustration.vue'
 import OfferCard from './OfferCard.vue'
 import PurchaseSuccess from './PurchaseSuccess.vue'
 import { paywallApi } from '../api/paywall-api'
 import { usePaywall } from '../composables/usePaywall'
+import UiButton from '../../../ui/UiButton.vue'
+import UiMessage from '../../../ui/UiMessage.vue'
 
 const {
   offers,
@@ -13,6 +16,7 @@ const {
   receipt,
   restored,
   error,
+  catalogError,
   notice,
   busy,
   load,
@@ -80,12 +84,14 @@ onScopeDispose(dispose)
           <div class="skeleton-card" />
           <span class="sr-only">Загружаем тарифы…</span>
         </div>
-        <div v-else-if="error?.scope === 'offers'" class="catalog-error" role="alert">
-          <span class="status-icon" aria-hidden="true">!</span>
-          <h2>Тарифы немного задержались</h2>
-          <p>{{ error.message }}</p>
-          <button class="secondary-button" type="button" @click="load">Попробовать ещё раз</button>
-        </div>
+        <UiMessage v-else-if="catalogError" tone="error" title="Тарифы немного задержались">
+          {{ catalogError }}
+          <template #actions>
+            <UiButton variant="secondary" :disabled="busy" @click="load">
+              Попробовать ещё раз
+            </UiButton>
+          </template>
+        </UiMessage>
         <fieldset v-else class="offers" :disabled="busy">
           <legend class="sr-only">Выберите тариф</legend>
           <OfferCard
@@ -98,19 +104,17 @@ onScopeDispose(dispose)
             @select="select"
           />
         </fieldset>
-        <div v-if="error && error.scope !== 'offers'" class="inline-message is-error" role="alert">
-          <span aria-hidden="true">!</span>
-          <p>{{ error.message }}</p>
-        </div>
-        <p v-if="notice" class="inline-message" role="status">{{ notice }}</p>
-        <template v-if="error?.scope !== 'offers'">
-          <button
+        <UiMessage v-if="error" class="purchase-message" tone="error">
+          {{ error.message }}
+        </UiMessage>
+        <UiMessage v-if="notice" class="purchase-message">{{ notice }}</UiMessage>
+        <template v-if="!catalogError">
+          <UiButton
             class="purchase-button"
-            type="button"
             :disabled="busy || !selected"
+            :loading="operation === 'purchasing'"
             @click="error?.code === 'SESSION_REQUIRED' ? load() : purchase()"
           >
-            <span v-if="operation === 'purchasing'" class="spinner" aria-hidden="true" />
             <span>
               {{
                 operation === 'purchasing'
@@ -122,23 +126,19 @@ onScopeDispose(dispose)
                       : 'Открыть весь мир'
               }}
             </span>
-            <svg
-              v-if="operation !== 'purchasing'"
-              width="22"
-              height="22"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
-              <path
-                d="M6 18 18 6M6 6h12v12"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2.3"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-          </button>
+            <template #trailing>
+              <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M6 18 18 6M6 6h12v12"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.3"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </template>
+          </UiButton>
           <p class="purchase-disclosure">
             <template v-if="selected">
               Тестовая покупка · {{ formattedPrice }} ₽ за {{ selected.durationDays }} дней
@@ -151,15 +151,15 @@ onScopeDispose(dispose)
             Деньги не спишутся. Автопродления нет.
           </p>
         </template>
-        <button
+        <UiButton
+          variant="ghost"
           class="restore-button"
-          type="button"
-          :disabled="busy || !offers.length"
+          :disabled="busy"
+          :loading="operation === 'restoring'"
           @click="restore"
         >
-          <span v-if="operation === 'restoring'" class="spinner" aria-hidden="true" />
           {{ operation === 'restoring' ? 'Ищем вашу покупку…' : 'Восстановить покупки' }}
-        </button>
+        </UiButton>
         <span class="sr-only" role="status">
           {{
             operation === 'purchasing'
@@ -174,3 +174,5 @@ onScopeDispose(dispose)
     <footer class="app-footer">Учебный проект. Маленькая игра, большие мечты.</footer>
   </main>
 </template>
+
+<style src="./PaywallPage.css" scoped />

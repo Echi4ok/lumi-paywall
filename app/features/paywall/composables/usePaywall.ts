@@ -5,7 +5,7 @@ import { PaywallApiError } from '../api/api-error'
 import { createPurchaseAttempts } from '../api/purchase-attempts'
 
 type Operation = 'loading' | 'idle' | 'purchasing' | 'restoring'
-type ErrorScope = 'offers' | 'purchase' | 'restore'
+type ErrorScope = 'purchase' | 'restore'
 
 /** One operation at a time; an uncertain purchase keeps its idempotency key for retry. */
 export function usePaywall(
@@ -18,6 +18,7 @@ export function usePaywall(
   const operation = ref<Operation>('loading')
   const receipt = ref<PurchaseReceipt | null>(null)
   const restored = ref(false)
+  const catalogError = ref<string | null>(null)
   const error = ref<{ scope: ErrorScope; message: string; code?: 'SESSION_REQUIRED' } | null>(null)
   const notice = ref('')
   const selected = computed(() => offers.value.find((offer) => offer.id === selectedId.value))
@@ -51,12 +52,19 @@ export function usePaywall(
             message:
               'Разрешите cookies для этого сайта, затем нажмите «Обновить доступ». Они нужны, чтобы сохранить покупку на вашем устройстве.',
           }
-        : { scope, message }
+        : {
+            scope,
+            message:
+              cause instanceof PaywallApiError && cause.code === 'RATE_LIMITED'
+                ? 'Слишком много запросов. Немного подождите и попробуйте ещё раз.'
+                : message,
+          }
   }
 
   async function load() {
     if (disposed || pending || receipt.value) return
     const controller = begin('loading')
+    catalogError.value = null
     try {
       const response = await api.offers(controller.signal)
       if (disposed) return
@@ -68,12 +76,14 @@ export function usePaywall(
         response.offers.find((offer) => offer.recommended) ??
         response.offers[0]!
       ).id
-    } catch {
+    } catch (cause) {
       if (!disposed)
-        error.value = {
-          scope: 'offers',
-          message: 'Не удалось загрузить тарифы. Проверьте интернет и попробуйте ещё раз.',
-        }
+        catalogError.value =
+          cause instanceof PaywallApiError && cause.code === 'BOOTSTRAP_REQUIRED'
+            ? 'Разрешите cookies и локальное хранилище для этого сайта, затем попробуйте ещё раз. Они нужны, чтобы сохранить доступ на вашем устройстве.'
+            : cause instanceof PaywallApiError && cause.code === 'RATE_LIMITED'
+              ? 'Слишком много запросов. Немного подождите и попробуйте ещё раз.'
+              : 'Не удалось загрузить тарифы. Проверьте интернет и попробуйте ещё раз.'
     } finally {
       finish(controller)
     }
@@ -97,9 +107,14 @@ export function usePaywall(
         controller.signal,
       )
       if (disposed) return
+      attempts.confirm(response.purchase.offerId, response.purchase.requestId)
+      if (!response.active) {
+        notice.value =
+          'Срок этой покупки уже истёк. Нажмите «Открыть весь мир», чтобы оформить новый доступ.'
+        return
+      }
       receipt.value = response.purchase
       restored.value = false
-      attempts.delete(offerId)
     } catch (cause) {
       failure(
         'purchase',
@@ -112,12 +127,13 @@ export function usePaywall(
   }
 
   async function restore() {
-    if (disposed || busy.value || receipt.value || !offers.value.length) return
+    if (disposed || busy.value || receipt.value) return
     const controller = begin('restoring')
     try {
       const response = await api.restore(controller.signal)
       if (disposed) return
       if (response.purchase) {
+        attempts.confirm(response.purchase.offerId, response.purchase.requestId)
         receipt.value = response.purchase
         restored.value = true
       } else
@@ -145,6 +161,7 @@ export function usePaywall(
     operation,
     receipt,
     restored,
+    catalogError,
     error,
     notice,
     busy,

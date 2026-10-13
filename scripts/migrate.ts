@@ -1,21 +1,32 @@
-import { readFile } from 'node:fs/promises'
-import { neon } from '@neondatabase/serverless'
+import { fileURLToPath } from 'node:url'
+import { createExternalDatabase } from '../server/infrastructure/database/external-database.ts'
+import {
+  loadMigrations,
+  migrationStatements,
+  verifyMigrations,
+} from '../server/infrastructure/database/migrations.ts'
+import { safeErrorDetails } from '../server/infrastructure/diagnostics.ts'
 
-const connectionString = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL
-if (!connectionString) {
-  throw new Error(
-    'Set DATABASE_URL before running production migrations. Local dev migrates automatically.',
-  )
+let stage = 'load'
+try {
+  const migrations = await loadMigrations(fileURLToPath(new URL('../migrations', import.meta.url)))
+  stage = 'connect'
+  const db = await createExternalDatabase({
+    ...process.env,
+    DATABASE_URL: process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL,
+  })
+  try {
+    stage = 'apply'
+    if (!process.argv.includes('--check')) await db.transaction(migrationStatements(migrations))
+    stage = 'verify'
+    await verifyMigrations(db, migrations)
+    console.info(
+      `Verified ${migrations.length} migrations${process.argv.includes('--check') ? ' (read only)' : ''}`,
+    )
+  } finally {
+    await db.close()
+  }
+} catch (error) {
+  console.error('Migration failed', { stage, ...safeErrorDetails(error) })
+  process.exitCode = 1
 }
-const migration = await readFile(
-  new URL('../migrations/001_purchases.sql', import.meta.url),
-  'utf8',
-)
-const sql = neon(connectionString)
-// The initial migration is intentionally rerunnable; both DDL statements commit together.
-const statements = migration
-  .split(';')
-  .map((statement) => statement.trim())
-  .filter(Boolean)
-await sql.transaction(statements.map((statement) => sql.query(statement)))
-console.info('Applied 001_purchases.sql')

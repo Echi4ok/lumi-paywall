@@ -1,0 +1,25 @@
+@font-face {
+  font-family: Nunito;
+  src: url('/fonts/nunito-variable.ttf') format('truetype');
+  font-weight: 200 1000;
+  font-style: normal;
+  font-display: swap;
+}
+:root {
+  --paper: #f8f6ff;
+  --ink: #33264b;
+  --muted: #726580;
+  --purple: #7655b8;
+  --pale: #f0e9ff;
+  --border: #e4deed;
+  --control-border: #9385a5;
+  --coral: #f58b76;
+  --white: #fff;
+  --green: #456d5c;
+  font-family: Nunito, ui-rounded, system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+  font-synthesis: none;
+  -webkit-text-size-adjust: 100%;
+  text-rendering: optimizeLegibility;
+}

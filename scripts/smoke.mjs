@@ -5,10 +5,12 @@ import { randomUUID } from 'node:crypto'
 const base = process.argv[2] || 'http://127.0.0.1:3000'
 const origin = new URL(base).origin
 let cookie = ''
+const bootstrapId = randomUUID()
 async function call(path, { method = 'GET', body, isolated = false } = {}) {
   const response = await fetch(new URL(path, base), {
     method,
     headers: {
+      ...(path === '/api/offers' ? { 'x-lumi-bootstrap': bootstrapId } : {}),
       ...(cookie && !isolated ? { cookie } : {}),
       ...(method === 'POST' ? { origin, 'content-type': 'application/json' } : {}),
     },
@@ -36,7 +38,9 @@ assert.ok(concurrent.every((result) => result.response.status === 200))
 assert.equal(concurrent.filter((result) => result.data.replayed === false).length, 1)
 assert.equal(new Set(concurrent.map((result) => result.data.purchase.id)).size, 1)
 const purchased = concurrent[0]
+assert.ok(concurrent.every((result) => result.data.active === true))
 assert.equal(purchased.data.purchase.offerId, 'yearly')
+assert.equal(purchased.data.purchase.requestId, request.requestId)
 const receiptId = purchased.data.purchase.id
 const retry = await call('/api/purchase', { method: 'POST', body: request })
 assert.equal(retry.data.purchase.id, receiptId)
@@ -55,12 +59,14 @@ const invalid = await call('/api/purchase', {
 assert.equal(invalid.response.status, 400)
 const otherDevice = await call('/api/restore', { method: 'POST', body: {}, isolated: true })
 assert.equal(otherDevice.data.purchase, null)
+const health = await call('/api/health')
+assert.equal(health.response.status, 200)
 
 console.log(
   JSON.stringify(
     {
       base,
-      checks: 8,
+      checks: 9,
       concurrentRequests: 12,
       purchaseId: receiptId,
       restored: true,

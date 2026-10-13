@@ -5,18 +5,23 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import offers from '../../server/api/offers.get'
 import purchase from '../../server/api/purchase.post'
 import restore from '../../server/api/restore.post'
-import { getPaywallService } from '../../server/infrastructure/services'
+import { getPaywallService, getRateLimiter } from '../../server/infrastructure/services'
 import { DomainError } from '../../server/domain/errors'
 
-vi.mock('../../server/infrastructure/services', () => ({ getPaywallService: vi.fn() }))
+vi.mock('../../server/infrastructure/services', () => ({
+  getPaywallService: vi.fn(),
+  getRateLimiter: vi.fn(),
+}))
 
 const receipt = {
   id: randomUUID(),
+  requestId: randomUUID(),
   offerId: 'yearly' as const,
   purchasedAt: '2026-10-13T12:00:00.000Z',
   expiresAt: '2027-10-13T12:00:00.000Z',
 }
 const service = { purchase: vi.fn(), restore: vi.fn() }
+const limiter = { consume: vi.fn() }
 let server: Server
 let origin: string
 
@@ -35,10 +40,13 @@ beforeAll(async () => {
 })
 beforeEach(() => {
   vi.clearAllMocks()
-  service.purchase.mockResolvedValue({ purchase: receipt, replayed: false })
+  service.purchase.mockResolvedValue({ purchase: receipt, replayed: false, active: true })
   service.restore.mockResolvedValue({ purchase: receipt })
   vi.mocked(getPaywallService).mockResolvedValue(service)
+  vi.mocked(getRateLimiter).mockResolvedValue(limiter as Awaited<ReturnType<typeof getRateLimiter>>)
+  limiter.consume.mockResolvedValue({ allowed: true, retryAfter: 30 })
   vi.stubEnv('APP_ORIGIN', '')
+  vi.stubEnv('RATE_LIMIT_SECRET', 'test-only-rate-limit-secret')
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -62,7 +70,9 @@ function post(path: string, body?: unknown, headers: Record<string, string> = {}
 
 describe('HTTP adapters', () => {
   it('offers establishes an opaque HttpOnly device cookie and disables caching', async () => {
-    const response = await fetch(`${origin}/api/offers`)
+    const response = await fetch(`${origin}/api/offers`, {
+      headers: { 'x-lumi-bootstrap': randomUUID() },
+    })
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toContain('no-store')
     const setCookie = response.headers.get('set-cookie')!
@@ -80,7 +90,7 @@ describe('HTTP adapters', () => {
 
   it('marks the cookie Secure when running behind an HTTPS proxy', async () => {
     const response = await fetch(`${origin}/api/offers`, {
-      headers: { 'x-forwarded-proto': 'https' },
+      headers: { 'x-forwarded-proto': 'https', 'x-lumi-bootstrap': randomUUID() },
     })
     expect(response.headers.get('set-cookie')).toContain('Secure')
   })
@@ -96,7 +106,7 @@ describe('HTTP adapters', () => {
     const input = { offerId: 'yearly', requestId: randomUUID() }
     const response = await post('/api/purchase', input, { cookie: `lumi_device=${deviceId}` })
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ purchase: receipt, replayed: false })
+    expect(await response.json()).toEqual({ purchase: receipt, replayed: false, active: true })
     expect(service.purchase).toHaveBeenCalledWith(deviceId, input)
   })
 
@@ -216,6 +226,71 @@ describe('HTTP adapters', () => {
     expect(body).toContain('SERVICE_UNAVAILABLE')
     expect(body).not.toContain('secret')
     expect(body).not.toContain('SQL internal')
-    expect(log).toHaveBeenCalledWith('[paywall] Operation failed', { type: 'Error' })
+    expect(log).toHaveBeenCalledWith('[paywall] Operation failed', {
+      type: 'Error',
+      requestId: response.headers.get('x-request-id'),
+      operation: 'restore',
+      status: 503,
+    })
+  })
+
+  it('gives concurrent first requests the same device, independent of response order', async () => {
+    const bootstrap = randomUUID()
+    const responses = await Promise.all(
+      Array.from({ length: 12 }, () =>
+        fetch(`${origin}/api/offers`, { headers: { 'x-lumi-bootstrap': bootstrap } }),
+      ),
+    )
+    expect(responses.every((response) => response.status === 200)).toBe(true)
+    expect(
+      new Set(responses.map((response) => response.headers.get('set-cookie')?.split(';')[0])),
+    ).toEqual(new Set([`lumi_device=${bootstrap}`]))
+  })
+
+  it('rejects absent or invalid bootstrap without inventing another device', async () => {
+    for (const bootstrap of ['', 'not-a-uuid']) {
+      const response = await fetch(`${origin}/api/offers`, {
+        headers: { 'x-lumi-bootstrap': bootstrap },
+      })
+      expect(response.status).toBe(400)
+      expect(response.headers.get('set-cookie')).toBeNull()
+      expect(await response.json()).toMatchObject({ data: { code: 'BOOTSTRAP_REQUIRED' } })
+    }
+  })
+
+  it('enforces the distributed limiter before purchasing and includes retry delay', async () => {
+    limiter.consume.mockResolvedValue({ allowed: false, retryAfter: 17 })
+    const response = await post(
+      '/api/purchase',
+      { offerId: 'yearly', requestId: randomUUID() },
+      { cookie: cookie() },
+    )
+    expect(response.status).toBe(429)
+    expect(response.headers.get('retry-after')).toBe('17')
+    expect(await response.json()).toMatchObject({ data: { code: 'RATE_LIMITED' } })
+    expect(service.purchase).not.toHaveBeenCalled()
+  })
+
+  it('logs only bounded diagnostic fields and never trusts a client request ID', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    service.restore.mockRejectedValue(
+      Object.assign(new Error('postgresql://secret@host private SQL'), {
+        code: '42P01',
+        name: 'secret-custom-error-name',
+      }),
+    )
+    const response = await post('/api/restore', undefined, {
+      cookie: cookie(),
+      'x-request-id': 'secret-client-input',
+    })
+    expect(log).toHaveBeenCalledWith('[paywall] Operation failed', {
+      requestId: response.headers.get('x-request-id'),
+      operation: 'restore',
+      status: 503,
+      type: 'UnknownError',
+      code: '42P01',
+    })
+    expect(JSON.stringify(log.mock.calls)).not.toContain('secret')
+    expect(await response.text()).not.toContain('secret')
   })
 })
