@@ -4,6 +4,8 @@
 
 **[Открыть приложение](https://lumi-paywall.vercel.app)** · **[Макет в Figma](https://www.figma.com/design/UXGo2MuLLvDZEtRs3Giisd?node-id=2-2)** · **[GitHub](https://github.com/Echi4ok/lumi-paywall)**
 
+[![Quality checks](https://github.com/Echi4ok/lumi-paywall/actions/workflows/ci.yml/badge.svg)](https://github.com/Echi4ok/lumi-paywall/actions/workflows/ci.yml)
+
 ## Локальный запуск
 
 Node **22.23.3** (`.nvmrc`), npm. Без аккаунтов и ключей:
